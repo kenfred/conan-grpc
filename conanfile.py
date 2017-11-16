@@ -1,55 +1,86 @@
 import shutil
+import os, sys
 
 from conans import ConanFile
 from conans import tools
 from conans.errors import ConanException
-
+from conans.tools import os_info, SystemPackageTool, download, untargz, replace_in_file, unzip
+from conans import CMake
 
 class GrpcConan(ConanFile):
     name = "grpc"
-    version = "1.0.1"
-
+    version = "1.6.6"
     url = "https://github.com/sourcedelica/conan-grpc"
+    repo_url = 'https://github.com/grpc/grpc.git'
     settings = "os", "compiler", "build_type", "arch"
-    license = "Three-clause BSD"
-    description = "RPC library from Google based on Protobuf"
-    generators = "cmake"
-    exports = "change_dylib_names.sh"
-    _source_dir = "grpc"
+    options = {
+        "shared": [True, False],
+        "use_proto_lite": [True, False],
+        "build_tests": [True, False]
+    }
+    default_options = "shared=False", "use_proto_lite=False", "build_tests=False"
 
-    def config_options(self):
-        if self.settings.compiler == 'gcc' and float(self.settings.compiler.version.value) >= 5.1:
-            if self.settings.compiler.libcxx != 'libstdc++11':
-                raise ConanException("You must use the setting compiler.libcxx=libstdc++11")
+    license = "Apache License 2.0"
+    requires = 'zlib/1.2.11@conan/stable', \
+                'OpenSSL/1.0.2l@conan/stable', \
+                'c-ares/1.12.0@lhcorralo/testing', \
+                'Protobuf/3.4.0@kenfred/testing', \
+                'gflags/2.2.0@kenfred/testing', \
+                'benchmark/1.1.0@jjones646/stable'
+
+    description = "An RPC library and framework"
+    generators = "cmake", "txt"
+    short_paths = True
+    _source_dir = "grpc-%s" % version
 
     def source(self):
-        self.run("git clone https://github.com/grpc/grpc.git --branch v%s --depth 1" 
-                 % self.version)
-        # TODO - is there a reliable way to get shallow submodules to work?
-        self.run("git submodule update --init", cwd=self._source_dir)
-        shutil.copy("change_dylib_names.sh", self._source_dir)
+        file_name = "v%s.zip" % self.version if sys.platform == "win32" else "v%s.tar.gz" % self.version
+        zip_name = "grpc-%s.zip" % self.version if sys.platform == "win32" else "grpc-%s.tar.gz" % self.version
+        url = "https://github.com/grpc/grpc/archive/%s" % file_name
+        self.output.info("Downloading %s..." % url)
+        tools.download(url, zip_name)
+        tools.unzip(zip_name)
+        os.unlink(zip_name)
 
     def build(self):
-        cpus = tools.cpu_count()
-        # TODO - remove this after https://github.com/grpc/grpc/pull/8274 is fixed
-        command_line_env = "CPPFLAGS='-DOSATOMIC_USE_INLINED=1'" if self.settings.os == "Macos" else ""
-        self.run("%s make -j %s" % (command_line_env, cpus), cwd=self._source_dir)
+        cmake = CMake(self)
 
-    def package(self):
-        if self.settings.os == "Macos":
-            # Change *.dylib dependencies and ids to be relative to @executable_path
-            self.run("bash change_dylib_names.sh", cwd=self._source_dir)
+        replace_in_file(os.path.join(self._source_dir, "CMakeLists.txt"), 'find_package(c-ares CONFIG)', 'find_package(cares MODULE)', strict=False)
+        
 
-        self.copy("*.h",     dst="include", src="%s/include" % self._source_dir)
-        self.copy("*.a",     dst="lib",     src="%s/libs/opt" % self._source_dir)
-        self.copy("*.lib",   dst="lib",     src="%s/libs/opt" % self._source_dir)
-        self.copy("*.dylib", dst="lib",     src="%s/libs/opt" % self._source_dir)
-        self.copy("*.so*",   dst="lib",     src="%s/libs/opt" % self._source_dir)
-        self.copy("*",       dst="bin",     src="%s/bins/opt" % self._source_dir)
+        defs = dict()
+        defs['gRPC_BUILD_TESTS'] = "ON" if self.options.build_tests else "OFF"
+        defs['CMAKE_INSTALL_PREFIX'] = self.package_folder
+        defs['gRPC_ZLIB_PROVIDER'] = "package"
+        defs['gRPC_CARES_PROVIDER'] = "package"
+        defs['gRPC_SSL_PROVIDER'] = "package"
+        defs['gRPC_PROTOBUF_PROVIDER'] = "package"
+        defs['gRPC_PROTOBUF_PACKAGE_TYPE'] = "CONFIG"
+        defs['gRPC_GFLAGS_PROVIDER'] = "package"
+        defs['gRPC_BENCHMARK_PROVIDER'] = "package"
+        defs['gRPC_USE_PROTO_LITE'] = "ON" if self.options.use_proto_lite else "OFF"
+
+        if self.settings.compiler == "Visual Studio":
+            vs_runtime = "%s" % self.settings.compiler.runtime
+            defs['gRPC_MSVC_STATIC_RUNTIME'] = "ON" if (vs_runtime[:2] == "MT") else "OFF"
+
+        # defs['ZLIB_ROOT'] = self.deps_cpp_info['zlib'].rootpath   
+        # defs['OPENSSL_ROOT_DIR'] = self.deps_cpp_info['OpenSSL'].rootpath
+        dirs = ';'.join(self.deps_cpp_info.builddirs)
+        dirs = dirs.replace('\\','/')
+        self.output.info(dirs)
+        defs['CMAKE_MODULE_PATH'] = dirs
+        defs['CMAKE_PREFIX_PATH'] = dirs 
+            
+        cmake.configure(source_dir=self._source_dir, build_dir=".", defs=defs)
+        cmake.build()
+        cmake.install()
+
 
     def package_info(self):
-        # TODO: This should be customized based on options like secure:True, reflection:True
-        self.cpp_info.libs = ["boringssl", "gpr",
-                              "grpc++", "grpc++_unsecure", "grpc++_reflection",
-                              "grpc", "grpc_unsecure"]
-
+        self.cpp_info.includedirs = ["include"]
+        self.cpp_info.libs = ["gpr", "grpc", "grpc_cronet", "grpc_csharp_ext",
+                                "grpc_plugin_support", "grpc_unsecure", 
+                                "grpc++", "grpc++_cronet", "grpc++_error_details",
+                                "grpc++_reflection", "grpc++_unsecure"]
+        self.env_info.path.append(os.path.join(self.package_folder, "bin"))
