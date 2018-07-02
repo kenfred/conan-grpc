@@ -1,10 +1,8 @@
-import shutil
 import os, sys
 
 from conans import ConanFile
 from conans import tools
-from conans.errors import ConanException
-from conans.tools import os_info, SystemPackageTool, download, untargz, replace_in_file, unzip
+from conans.tools import replace_in_file
 from conans import CMake
 
 class GrpcConan(ConanFile):
@@ -22,11 +20,11 @@ class GrpcConan(ConanFile):
 
     license = "Apache License 2.0"
     requires = 'zlib/1.2.11@conan/stable', \
-                'OpenSSL/1.0.2l@conan/stable', \
-                'c-ares/1.13.0@lhcorralo/testing', \
+                'OpenSSL/1.0.2o@conan/stable', \
+                'c-ares/1.14.0@conan/stable', \
                 'Protobuf/3.4.0@kenfred/testing', \
-                'gflags/2.2.0@kenfred/testing', \
-                'benchmark/1.1.0@jjones646/stable'
+                'gflags/2.2.1@bincrafters/stable', \
+                'benchmark/1.2.0@kenfred/testing'
 
     description = "An RPC library and framework"
     generators = "cmake", "txt"
